@@ -144,9 +144,11 @@ async function rulesFor($: EngineInterface, limits: Limits): Promise<string> {
  * asymmetry in the rules decides this: a wrong hold costs a turn, a wrong compaction
  * loses work nobody notices is gone, so the unparseable case takes the cheap side.
  */
-function judged(text: string): { isReady: boolean; line: string } {
+export function judged(text: string): { isReady: boolean; line: string } {
   const lines = text.trim().split('\n').map(one => one.trim()).filter(one => one !== '')
-  const isReady = /^READY\b/i.test(lines[0] ?? '')
+  // The whole line, not a prefix: `/^READY\\b/` let "READY, I think" through, and
+  // a hedged verdict is exactly the case the asymmetry says to refuse.
+  const isReady = /^ready$/i.test(lines[0] ?? '')
   const named = lines.find(one => /^keep:/i.test(one))
   return { isReady, line: (named ?? '').replace(/^keep:\s*/i, '').trim() }
 }
