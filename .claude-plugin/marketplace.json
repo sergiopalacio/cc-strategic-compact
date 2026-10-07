@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cc-strategic-compaction",
+  "description": "Claude decides when to compact, and compacts.",
+  "owner": {
+    "name": "Sergio Palacio",
+    "email": "sergio.palaciorodenas@cloudblue.com"
+  },
+  "plugins": [
+    {
+      "name": "cc-strategic-compaction",
+      "description": "Compacts the conversation when the rules say the moment is right, judged against the conversation itself, or when the model asks through its own MCP tool.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

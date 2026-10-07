@@ -1,0 +1,57 @@
+{
+  "name": "cc-strategic-compaction",
+  "version": "0.19.0",
+  "description": "Compacts the conversation when the rules say the moment is right, judged against the conversation itself at the end of a turn.",
+  "author": {
+    "name": "Sergio Palacio"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "judgeEnabled": {
+      "type": "boolean",
+      "title": "Judge",
+      "description": "Ask the judge at the end of each turn whether the moment is right. Off leaves the agent's own tool as the only way in.",
+      "default": true
+    },
+    "toolEnabled": {
+      "type": "boolean",
+      "title": "MCP Tool",
+      "description": "Register the MCP tool the agent calls to compact itself. Off leaves the judge as the only way in. Unregistering takes effect at the next session; until then a call is refused.",
+      "default": true
+    },
+    "compactWhen": {
+      "type": "string",
+      "title": "Your rules",
+      "description": "When to compact, in your own words. Judged against the conversation at the end of each turn.",
+      "default": ""
+    },
+    "rulesMode": {
+      "type": "string",
+      "title": "Your rules, how",
+      "description": "append: your rules are added to the packaged ones. override: only yours are used.",
+      "options": [
+        "append",
+        "override"
+      ],
+      "default": "append"
+    },
+    "askFromPercent": {
+      "type": "number",
+      "title": "Judge from",
+      "description": "Percent of the context window below which nothing is judged, so early turns cost no model call. 0 judges every turn.",
+      "default": 0
+    },
+    "toolThreshold": {
+      "type": "number",
+      "title": "After N calls",
+      "description": "Tool calls that compact on their own, counting every tool the main loop runs. Unrelated to the MCP Tool switch. 0 is off, which is the default: a count of calls says nothing about whether the moment is right.",
+      "default": 0
+    },
+    "toolInterval": {
+      "type": "number",
+      "title": "Then every N calls",
+      "description": "Further calls between tool-triggered compactions. Only read when the tool trigger is on.",
+      "default": 25
+    }
+  }
+}
