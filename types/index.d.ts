@@ -52,8 +52,11 @@ export type CompactionJudgement = {
   at: number
   /** Whether that answer let a compaction through. */
   isReady: boolean
-  /** What it named: the thing that would be lost, or what the summary must keep. */
+  /** What the summary must keep; empty on a hold, which names nothing. */
   line: string
+  /** Holds in a row, reset by a ready. One says nothing; twenty say the rules
+   *  never let anything through, which is the failure worth seeing. */
+  holds: number
 }
 
 /**

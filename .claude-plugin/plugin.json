@@ -1,6 +1,6 @@
 {
   "name": "cc-strategic-compaction",
-  "version": "0.19.0",
+  "version": "0.22.0",
   "description": "Compacts the conversation when the rules say the moment is right, judged against the conversation itself at the end of a turn.",
   "author": {
     "name": "Sergio Palacio"

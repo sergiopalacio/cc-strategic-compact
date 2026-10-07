@@ -18,7 +18,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import { headerSvg, themeOf } from './header'
-import { PACKAGED_RULES } from './rules'
+import { TOOL_INPUT } from '../prompts/tool'
 import type { CompactionCounts } from '../types'
 
 const PANE = 'compaction'
@@ -71,6 +71,8 @@ const POLL_MS = 15_000
 const PATIENCE_MS = 600_000
 /** How many past compactions the pane can show before the oldest falls off. */
 const HISTORY = 8
+/** Under `$HOME`: where each compaction leaves the conversation it replaced. */
+const ARCHIVE = '.cc-strategic-compaction/compactions'
 
 type Limits = {
   judgeEnabled: boolean
@@ -101,35 +103,38 @@ async function factsFor($: EngineInterface): Promise<Facts> {
 }
 
 /** The rules the judge is given: the packaged ones, the person's, or both. */
-function rulesFor(limits: Limits): string {
-  const mine = limits.compactWhen.trim()
-  if (limits.rulesMode === 'override') return mine
-  if (mine === '') return PACKAGED_RULES
-  return `${PACKAGED_RULES}\n\nAlso, from the person working here, and these win where they disagree with the above:\n${mine}`
+/**
+ * A prompt, from `prompts/*.md` beside the plugin.
+ *
+ * Markdown rather than a string literal so that changing what the judge is asked
+ * is editing a document, not editing code. That is not taste: the only honest way
+ * to tune this is to measure it, and a loop that recompiles to change a sentence
+ * is a loop nobody runs. The cost is that a missing file fails at run time rather
+ * than at build time.
+ *
+ * It lives here, and not in a module of its own, because the validator follows `$`
+ * only into functions declared in the same file.
+ *
+ * Held for the life of the module, so a turn never pays for a read twice and a
+ * hot reload picks up an edit.
+ */
+const held = new Map<string, string>()
+
+async function prompt($: EngineInterface, name: string): Promise<string> {
+  const have = held.get(name)
+  if (have !== undefined) return have
+  const text = (await $.fs.read(`${$.plugin.root}/prompts/${name}.md`)).trim()
+  held.set(name, text)
+  return text
 }
 
-/**
- * Short on purpose: `lost` is only ever read in the pane, on one line beside a
- * label, and a judge given no budget writes a paragraph into it.
- *
- * It asks the judge to NAME what would be lost rather than to return a verdict, so
- * that the reason is the output and not an ornament on one: a named thing can be
- * checked, and can be written down instead of lost. READY's answer is already the
- * brief for the summariser, so one call does both jobs.
- */
-function question(rules: string): string {
-  return (
-    `A tool is deciding whether to compact this conversation right now.\n\n` +
-    `${rules}\n\n` +
-    `Read the conversation above as it stands. Answer in exactly two lines:\n\n` +
-    `HOLD\nlost: <the one thing that exists only here, at most 8 words>\n\n` +
-    `or\n\n` +
-    `READY\nkeep: <everything the next turns need, on one line, as long as it takes>\n\n` +
-    `For lost, name the thing and do not describe it: "the failing auth test", not ` +
-    `"the fact that the auth test fails and why". keep has no such limit: it is the ` +
-    `brief the summariser works from, and anything left out of it is lost. ` +
-    `Nothing else, no preamble.`
-  )
+async function rulesFor($: EngineInterface, limits: Limits): Promise<string> {
+  const mine = limits.compactWhen.trim()
+  // Override with nothing of your own reads no file at all: there are no rules.
+  if (limits.rulesMode === 'override') return mine
+  const packaged = await prompt($, 'rules')
+  if (mine === '') return packaged
+  return `${packaged}\n\nAlso, from the person working here, and these win where they disagree with the above:\n${mine}`
 }
 
 /**
@@ -142,9 +147,8 @@ function question(rules: string): string {
 function judged(text: string): { isReady: boolean; line: string } {
   const lines = text.trim().split('\n').map(one => one.trim()).filter(one => one !== '')
   const isReady = /^READY\b/i.test(lines[0] ?? '')
-  const named = lines.find(one => /^(lost|keep):/i.test(one))
-  const line = (named ?? lines[1] ?? '').replace(/^(lost|keep):\s*/i, '').trim()
-  return { isReady, line }
+  const named = lines.find(one => /^keep:/i.test(one))
+  return { isReady, line: (named ?? '').replace(/^keep:\s*/i, '').trim() }
 }
 
 /** Token counts for a line with room for a number, not for six digits. */
@@ -202,7 +206,9 @@ function triggered(facts: Facts, limits: Limits): string | null {
  * is the only thing that tells them apart. Answers READY's brief, or null.
  */
 async function judge($: EngineInterface, rules: string, at: number): Promise<string | null> {
-  const asked = await $.model.fork({ prompt: question(rules) })
+  const asked = await $.model.fork({
+    prompt: (await prompt($, 'judge')).replace('{{rules}}', rules),
+  })
   if ('usage' in asked) {
     const used = asked.usage
     await update($, spend, s => ({
@@ -217,10 +223,33 @@ async function judge($: EngineInterface, rules: string, at: number): Promise<str
     return null
   }
   const verdict = judged(asked.text)
-  await update($, judgement, () => ({ at, ...verdict }))
-  if (verdict.isReady) return verdict.line
-  if (verdict.line !== '') $.ui.log(`compaction holding: ${verdict.line}`, { to: 'debug' })
-  return null
+  await update($, judgement, was => ({
+    at,
+    ...verdict,
+    holds: verdict.isReady ? 0 : (was?.holds ?? 0) + 1,
+  }))
+  return verdict.isReady ? verdict.line : null
+}
+
+/**
+ * Writes the conversation a compaction replaced, under `$HOME`.
+ *
+ * Not a backup: the session's own transcript keeps every message through a
+ * compaction, so nothing here is at risk of being lost today. What this adds is
+ * the boundary -- what was in context at the moment one ran, addressable without
+ * reading the whole session log to find where it fell -- and a copy that outlives
+ * `cleanupPeriodDays`, which sweeps transcripts after thirty days.
+ *
+ * Each file holds the messages since the one before it, so the set reconstructs
+ * the conversation without any file repeating another.
+ */
+async function archive($: EngineInterface, messages: readonly unknown[], at: number): Promise<void> {
+  const home = await $.env.get('HOME')
+  if (home === undefined) return
+  const id = await $.session.id()
+  const stamp = new Date(at).toISOString().replace(/[:.]/g, '-')
+  const body = messages.map(one => JSON.stringify(one)).join('\n')
+  await $.fs.write(`${home}/${ARCHIVE}/${id}/${stamp}.jsonl`, body)
 }
 
 /** `brief` is what the asker said the summary must carry, empty when none did. */
@@ -239,14 +268,23 @@ async function compact(
     )
     return
   }
+  // Read before, written after: once `compact` returns, these messages are no
+  // longer the conversation, and a veto must leave no file behind for a
+  // compaction that never happened.
+  const replaced = await $.session.messages({ as: 'api' })
   const also = brief === '' ? '' : ` Above all keep this, which the next turns need: ${brief}`
   const { skip } = await $.session.compact({
-    instructions: `Keep the task in hand, the decisions taken, and what is left to do.${also}`,
+    instructions: (await prompt($, 'summary')).replace('{{brief}}', also),
   })
   if (skip) {
     $.ui.log(`compaction vetoed: ${skip}`, { to: 'debug' })
     return
   }
+  await archive($, replaced, now).catch(one => {
+    // A record that cannot be written is not a reason to undo a compaction that
+    // already ran.
+    $.ui.log(`compaction archived nothing: ${String(one)}`, { to: 'debug' })
+  })
   await update($, history, past => [{ at: now, reason }, ...past].slice(0, HISTORY))
   await update($, counts, c => ({ ...c, toolsAtLast: c.tools }))
   $.ui.toast(`Compacted: ${reason}`)
@@ -297,7 +335,7 @@ function waitForGate(
         await compact($, await factsFor($), asked.reason, asked.keep, at)
         return
       }
-      const brief = await judge($, rulesFor(limits), at)
+      const brief = await judge($, await rulesFor($, limits), at)
       if (brief === null) return
       const why = 'the work in flight finished and nothing here is unwritten'
       await compact($, await factsFor($), why, brief, at)
@@ -333,24 +371,8 @@ export const register: Register = (on, options) => {
       if (limits.toolEnabled) {
         await $.tool.register({
           name: TOOL,
-          description:
-            'Compact this conversation at the end of the current turn, replacing it ' +
-            'with a summary. Call it when you have just written down everything that ' +
-            'matters and nothing in the conversation exists only here -- not because ' +
-            'the context is large, which the engine already handles. The rest of this ' +
-            'turn is unaffected. Only call this tool if you have instructions on when ' +
-            'to do automatic compaction.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              reason: { type: 'string', description: 'Why now, in a few words.' },
-              keep: {
-                type: 'string',
-                description: 'What the summary must carry forward for the work to continue.',
-              },
-            },
-            required: ['reason'],
-          },
+          description: await prompt($, 'tool'),
+          inputSchema: TOOL_INPUT,
         })
       }
     } catch (error) {
@@ -429,7 +451,7 @@ export const register: Register = (on, options) => {
 
     const facts = await factsFor($)
     const now = await $.clock.now()
-    const rules = rulesFor(limits)
+    const rules = await rulesFor($, limits)
     // `askFromPercent` holds back the judge's call, not a request already made.
     const asking =
       limits.judgeEnabled && rules.trim() !== '' && facts.percent >= limits.askFromPercent
@@ -497,7 +519,7 @@ export const register: Register = (on, options) => {
     const spent = await read($, spend)
     const now = await $.clock.now()
     const mine = limits.compactWhen
-    const hasRules = rulesFor(limits).trim() !== ''
+    const hasRules = (await rulesFor($, limits)).trim() !== ''
     const judging = hasRules && facts.percent >= limits.askFromPercent
     const toolsNext = nextTools(facts, limits)
 
@@ -529,10 +551,15 @@ export const register: Register = (on, options) => {
       ? { label: 'Waiting', detail: 'for the work in flight to finish' }
       : last === null
         ? { label: 'Not judged yet', detail: judging ? 'the first turn to end will' : '' }
-        : {
-            label: last.isReady ? 'Ready' : 'Holding',
-            detail: `${last.line === '' ? 'nothing named' : last.line} · ${ago(last.at, now)}`,
-          }
+        : last.isReady
+          ? { label: 'Ready', detail: ago(last.at, now) }
+          : {
+              label: 'Holding',
+              detail:
+                last.holds > 1
+                  ? `${last.holds} turns in a row · ${ago(last.at, now)}`
+                  : ago(last.at, now),
+            }
 
     // `most` because a percentage has a ceiling and a token count has none; without
     // one, a stray 280 here saves clean and switches the mod off until someone reads
