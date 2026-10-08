@@ -595,7 +595,10 @@ export const register: Register = (on, options) => {
               key={key}
               label={isOn ? ' on ' : ' off'}
               onPress={async () => {
-                if (!owned) return
+                if (!owned) {
+                  $.ui.toast(`${label}: no settings row ends in ${key}`)
+                  return
+                }
                 const { deny } = await $.config.set({ key: owned.key, value: !isOn })
                 $.ui.toast(deny ? `Refused: ${deny}` : `${label} ${isOn ? 'off' : 'on'}`)
               }}
@@ -623,8 +626,12 @@ export const register: Register = (on, options) => {
               placeholder={hint}
               submitLabel="set"
               onSubmit={async (text: string) => {
+                if (!owned) {
+                  $.ui.toast(`${label}: no settings row ends in ${key}`)
+                  return
+                }
                 const n = Number(text)
-                if (!owned || bad(n)) {
+                if (bad(n)) {
                   const range = most === undefined ? 'a number from 0' : `0 to ${most}`
                   $.ui.toast(`${label}: ${text} is not ${range}`)
                   return

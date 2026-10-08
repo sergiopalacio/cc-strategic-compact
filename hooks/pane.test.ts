@@ -61,3 +61,21 @@ test('the switch draws the setting as it stands', async ($, on) => {
   expect(await ui.find({ type: 'Button', text: /off/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('typing a percent in range writes it', async ($, on) => {
+  const seen = world(on)
+
+  const ui = await $.ui.mount({
+    plugin: 'cc-strategic-compaction',
+    surface: 'terminal',
+    component: 'Pane',
+    props: SITE,
+    requestId: 'compaction',
+  })
+  await ui.input({ key: 'askFromPercent', text: '30' })
+
+  expect(seen.written.map(one => `${one.path}=${one.text}`)).toContain(
+    'cc-strategic-compaction.askFromPercent=30',
+  )
+  await ui.unmount()
+})
