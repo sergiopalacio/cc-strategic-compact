@@ -578,8 +578,12 @@ export const register: Register = (on, options) => {
 
     // A Button rather than a Select: it is on every surface, and a two-state
     // control that needs a menu to change is a menu, not a switch.
-    const toggle = (key: string, label: string, isOn: boolean, hint: string) => {
+    const toggle = (key: string, label: string, fallback: boolean, hint: string) => {
       const owned = rows.find(one => one.key.endsWith(key))
+      // The live value, not `limits`: those were read when the module loaded, and
+      // the press that changes one is drawn before the reload that renews them, so
+      // a switch drawn from `limits` shows the old state and looks broken.
+      const isOn = typeof owned?.value === 'boolean' ? owned.value : fallback
       return (
         <Box key={key} flexDirection="row" gap={1}>
           {/* Bold because it heads a section now; the fields under it stay dim. */}

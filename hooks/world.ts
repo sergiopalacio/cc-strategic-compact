@@ -78,6 +78,8 @@ export type World = {
   messages?: { role: string; content: string }[]
   /** Refuses the compaction, as another plugin's veto would. */
   skip?: string
+  /** Settings values, as `config.list` reports them now. */
+  settings?: Record<string, boolean | string | number>
   /** Makes the write throw, as a full disk would. */
   writeFails?: boolean
 }
@@ -147,12 +149,14 @@ export function world(on: On, options: World = {}): Seen {
   on('config.list', () => ({
     value: ROWS.map(one => ({
       ...one,
+      value: options.settings?.[one.key] ?? one.value,
       key: `cc-strategic-compaction.${one.key}`,
       kind: typeof one.value === 'boolean' ? ('boolean' as const) : ('string' as const),
       provider: { kind: 'plugin' as const, name: 'cc-strategic-compaction' },
       isLocked: false,
     })) as never,
   }))
+  on('config.set', (_$, e) => (written.push({ path: String(e.key), text: String(e.value) }), { value: e.value }))
   on('ui.log', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
 
